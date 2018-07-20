@@ -5,10 +5,10 @@ import java.net.URI
 
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
-import com.amazonaws.auth.{ AWS3Signer, AWS4Signer, BasicAWSCredentials }
-import com.amazonaws.http.{ AmazonHttpClient, ExecutionContext, HttpMethodName }
-import com.amazonaws.services.s3.internal.S3StringResponseHandler
 import com.amazonaws._
+import com.amazonaws.auth.{AWS3Signer, AWS4Signer, BasicAWSCredentials}
+import com.amazonaws.http.{AmazonHttpClient, ExecutionContext, HttpMethodName}
+import com.amazonaws.services.s3.internal.S3StringResponseHandler
 import com.typesafe.config.ConfigFactory
 
 import scala.collection.mutable

@@ -12,7 +12,7 @@ import nl.wbaa.gargoyle.proxy.route._
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
-class S3Proxy()(implicit system: ActorSystem = ActorSystem.create("gargoyle-s3proxy")) extends LazyLogging with TranslateRoute {
+class S3Proxy()(implicit system: ActorSystem = ActorSystem.create("gargoyle-s3proxy")) extends LazyLogging {
   import S3Proxy._
 
   implicit val ec = system.dispatcher
