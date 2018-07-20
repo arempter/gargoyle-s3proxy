@@ -1,9 +1,9 @@
 package nl.wbaa.gargoyle.proxy
 
-
-object Server extends App {
-  {
-    val server = new S3Proxy
+object Server {
+  def main(args: Array[String]): Unit = {
+    val server = new S3Proxy()
     server.start()
   }
+
 }

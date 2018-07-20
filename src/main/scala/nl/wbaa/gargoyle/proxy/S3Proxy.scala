@@ -3,16 +3,16 @@ package nl.wbaa.gargoyle.proxy
 import akka.actor.ActorSystem
 import akka.event.Logging
 import akka.http.scaladsl.Http
+import akka.http.scaladsl.server.directives.DebuggingDirectives
 import akka.stream.ActorMaterializer
+import com.typesafe.config.ConfigFactory
 import com.typesafe.scalalogging.LazyLogging
 import nl.wbaa.gargoyle.proxy.route._
-import akka.http.scaladsl.server.directives.DebuggingDirectives
-import com.typesafe.config.ConfigFactory
 
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
-class S3Proxy()(implicit system: ActorSystem = ActorSystem.create("gargoyle-s3proxy")) extends LazyLogging {
+class S3Proxy()(implicit system: ActorSystem = ActorSystem.create("gargoyle-s3proxy")) extends LazyLogging with TranslateRoute {
   import S3Proxy._
 
   implicit val ec = system.dispatcher
@@ -25,7 +25,6 @@ class S3Proxy()(implicit system: ActorSystem = ActorSystem.create("gargoyle-s3pr
     val allRoutes =
       // concat new routes here
       ProxyRoute().route()
-    //GetRoute.route()
 
     // interface 0.0.0.0 needed in case of docker
 

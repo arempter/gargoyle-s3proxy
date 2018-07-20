@@ -1,50 +1,21 @@
 package nl.wbaa.gargoyle.proxy.providers
 
+import java.io.InputStream
 import java.net.URI
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.HttpRequest
-import com.amazonaws.{ ClientConfiguration, DefaultRequest, SignableRequest }
+import akka.http.scaladsl.model._
+import akka.http.scaladsl.model.headers.RawHeader
 import com.amazonaws.auth.{ AWS3Signer, AWS4Signer, BasicAWSCredentials }
 import com.amazonaws.http.{ AmazonHttpClient, ExecutionContext, HttpMethodName }
 import com.amazonaws.services.s3.internal.S3StringResponseHandler
+import com.amazonaws._
 import com.typesafe.config.ConfigFactory
 
-/**
- * Sample S3 Provider, ceph
- *
- */
-class CephProvider extends StorageProvider {
-  import CephProvider._
-
-  def endpoint = s3Endpoint
-  def credentials = s3credentials
-
-  def verifyS3Signature() = {}
-
-  /**
-   * Translates user request and executes it using Proxy credentials
-   *
-   * @param request
-   * @return
-   */
-  def translateRequest(request: HttpRequest): String = {
-    val path = request.uri.path.toString()
-    val method = request.method.value match {
-      case "GET"    => HttpMethodName.GET
-      case "POST"   => HttpMethodName.POST
-      case "PUT"    => HttpMethodName.PUT
-      case "DELETE" => HttpMethodName.DELETE
-    }
-
-    val proxyRequest = generateS3Request(method, path)
-    execS3Request(proxyRequest)
-  }
-}
+import scala.collection.mutable
+import scala.concurrent.Future
 
 /**
- * Sample S3 request generation methods, based on AWS Signer class
+ * S3 request generation methods, based on AWS Signer class
  * requires admin user AWS credentials
  *
  */
@@ -52,16 +23,18 @@ private class ContentHash extends AWS4Signer {
   def calculate(request: SignableRequest[_]) = super.calculateContentHash(request)
 }
 
-object CephProvider {
-  private val config = ConfigFactory.load().getConfig("s3.settings")
+object AWSSignatureProvider {
+  private val config = ConfigFactory.load().getConfig("s3.server")
   private val accessKey = config.getString("aws_access_key")
   private val secretKey = config.getString("aws_secret_key")
-  val s3Endpoint = config.getString("s3_endpoint")
+  val s3Host = config.getString("host")
+  val s3Port = config.getInt("port")
+  val s3Endpoint = s"http://$s3Host:$s3Port"
 
   val s3credentials = new BasicAWSCredentials(accessKey, secretKey)
   private val cephRGW = new URI(s3Endpoint)
 
-  private def s3Request(service: String): DefaultRequest[Nothing] = new DefaultRequest(service)
+  def s3Request(service: String): DefaultRequest[Nothing] = new DefaultRequest(service)
 
   /**
    * Prepares S3 request based on user request
@@ -73,10 +46,12 @@ object CephProvider {
    * @return
    */
   def generateS3Request(method: HttpMethodName, path: String, request: DefaultRequest[_] = s3Request("s3"), endpoint: URI = cephRGW): DefaultRequest[_] = {
+
     request.setHttpMethod(method)
     request.setEndpoint(endpoint)
     request.setResourcePath(path)
     //todo: add user request parameters
+    //request.setParameters(params)
     request
   }
 
@@ -110,13 +85,36 @@ object CephProvider {
    */
   private def calculateContentHash(request: DefaultRequest[_]): String = new ContentHash().calculate(request)
 
+  def AWStoAkkaHttpResponse(resp: Response[AmazonWebServiceResponse[String]]) = {
+    import scala.collection.JavaConverters._
+
+    def convertHeaders(headers: mutable.Map[String, String]): List[HttpHeader] = {
+      headers.keys.map(k =>
+        RawHeader(k, headers.get(k).get)
+      ).toList
+    }
+    def convertContent(resp: InputStream) = {
+      val data: Array[Byte] = Array()
+      val bytesRead = resp.read(data)
+      data
+    }
+
+    new HttpResponse(
+      StatusCodes.OK,
+      convertHeaders(resp.getHttpResponse.getHeaders.asScala),
+      resp.getAwsResponse.getResult,
+      HttpProtocols.`HTTP/1.1`)
+  }
+
   /**
    * Sends request to S3 backend
    *
    * @param request
    * @return
    */
-  def execS3Request(request: DefaultRequest[_]): String = {
+  def execS3Request(request: DefaultRequest[_], method: String) = {
+    import scala.concurrent.ExecutionContext.Implicits.global
+
     try {
       val clientConf = new ClientConfiguration()
       clientConf.addHeader("x-amz-content-sha256", calculateContentHash(request))
@@ -127,22 +125,33 @@ object CephProvider {
         .requestExecutionBuilder()
         .executionContext(new ExecutionContext(true))
         .request(request)
-        .execute(new S3StringResponseHandler()).getAwsResponse.getResult
+        //      .execute()
+        .execute(new S3StringResponseHandler())
 
-      response
+      Future(AWStoAkkaHttpResponse(response))
     } catch {
       case e: Exception => throw new Exception(e.getMessage)
     }
   }
 
-  // request by Akka HTTP change
-  //
-  def akkaS3Request(request: HttpRequest)(implicit system: ActorSystem) = {
-    implicit val ex = system.dispatcher
+  /**
+   * Translates user request and executes it using Proxy credentials
+   *
+   * @param request
+   * @return
+   */
+  def translateRequestWithTermination(request: HttpRequest) = {
 
-    Http().singleRequest(request).map {
-      case resp => resp.entity.dataBytes
-      case _    => throw new Exception("Failed to execute request")
+    val path = request.uri.path.toString()
+    val method = request.method.value match {
+      case "GET"    => HttpMethodName.GET
+      case "POST"   => HttpMethodName.POST
+      case "PUT"    => HttpMethodName.PUT
+      case "DELETE" => HttpMethodName.DELETE
     }
+
+    val proxyRequest = generateS3Request(method, path)
+    execS3Request(proxyRequest, request.method.value)
   }
+
 }
