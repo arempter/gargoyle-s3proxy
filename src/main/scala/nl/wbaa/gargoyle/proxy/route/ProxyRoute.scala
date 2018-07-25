@@ -2,6 +2,7 @@ package nl.wbaa.gargoyle.proxy.route
 
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Route
+import akka.stream.Materializer
 import com.typesafe.scalalogging.LazyLogging
 import nl.wbaa.gargoyle.proxy.handler.RequestHandler
 import nl.wbaa.gargoyle.proxy.providers.AWSSignatureProvider._
@@ -10,7 +11,7 @@ import nl.wbaa.gargoyle.proxy.providers.{ AuthenticationProvider, AuthorizationP
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 
-case class ProxyRoute() extends LazyLogging
+case class ProxyRoute()(implicit mat: Materializer) extends LazyLogging
   with AuthenticationProvider
   with AuthorizationProvider
   with RequestHandler {
@@ -31,8 +32,8 @@ case class ProxyRoute() extends LazyLogging
           case true =>
             val newHtr = translateRequest(htr)
             logger.debug(s"NEW: $newHtr")
-            val response = translateRequestWithTermination(htr)
-            response.map(r => logger.debug(s"RESPONSE: ${r}"))
+            val response = proxyUsingApacheHttp(htr)
+            response.map(r => println(s"RESPONSE: ${r}")) //logger.debug
             response
         }
 
