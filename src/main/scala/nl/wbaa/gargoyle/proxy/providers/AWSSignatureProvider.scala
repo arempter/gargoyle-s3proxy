@@ -1,6 +1,6 @@
 package nl.wbaa.gargoyle.proxy.providers
 
-import java.io.InputStream
+import java.io.{ByteArrayInputStream, InputStream}
 import java.net.URI
 
 import akka.http.scaladsl.model._
@@ -8,18 +8,18 @@ import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
 import akka.stream.scaladsl.StreamConverters
 import com.amazonaws._
-import com.amazonaws.auth.{ AWS3Signer, AWS4Signer, BasicAWSCredentials }
-import com.amazonaws.http.{ AmazonHttpClient, ExecutionContext, HttpMethodName }
+import com.amazonaws.auth.{AWS3Signer, AWS4Signer, BasicAWSCredentials}
+import com.amazonaws.http.{AmazonHttpClient, ExecutionContext, HttpMethodName}
 import com.amazonaws.services.s3.internal.S3StringResponseHandler
 import com.amazonaws.util.BinaryUtils
 import com.typesafe.config.ConfigFactory
 import org.apache.http.client.methods._
 import org.apache.http.client.utils.URIBuilder
 import org.apache.http.entity.BasicHttpEntity
-import org.apache.http.impl.client.{ BasicResponseHandler, HttpClients }
+import org.apache.http.impl.client.{BasicResponseHandler, HttpClients}
 import org.apache.http.message.BasicHeader
 import org.apache.http.protocol.HttpContext
-import org.apache.http.{ Header, HttpRequestInterceptor }
+import org.apache.http.{Header, HttpRequestInterceptor}
 
 import scala.collection.mutable
 import scala.concurrent.Future
@@ -80,6 +80,8 @@ object AWSSignatureProvider {
         rawQueryString match {
           // for aws subresource ?acl etc.
           case queryStr if queryStr.length > 1 && !queryStr.contains("=") =>
+            // AWSHttpClient doesn't seem to handle query params like ?acl - to be checked
+            // so when the param value is empty
             Map(queryStr -> List[String]().asJava)
           // single param=value
           case queryStr if queryStr.contains("=") && !queryStr.contains("&") =>
@@ -115,7 +117,7 @@ object AWSSignatureProvider {
       request.setResourcePath(path)
     }
 
-    //request.setContent(content)
+    request.setContent(content)
     println("generated request:" + request.getParameters)
     request
   }
@@ -138,6 +140,7 @@ object AWSSignatureProvider {
         val signer = new AWS4Signer()
         signer.setRegionName(region)
         signer.setServiceName(request.getServiceName)
+        println("signing request: " + request.getHeaders)
         signer.sign(request, cred)
     }
   }
@@ -175,6 +178,7 @@ object AWSSignatureProvider {
       signS3Request(request, s3credentials)
       println("signed request:" + request.getParameters())
 
+      // aws http client doesn't seem to handle query params like ?acl - to be checked
       val response = new AmazonHttpClient(clientConf)
         .requestExecutionBuilder()
         .executionContext(new ExecutionContext(true))
@@ -212,7 +216,18 @@ object AWSSignatureProvider {
     execS3RequestAWSHttpClient(proxyRequest, request.method.value, content)
   }
 
+  def convertToArray(content: InputStream, size: Int): Array[Byte] = {
+    val data = new Array[Byte](size)
+    content.read(data)
+    data
+  }
+
+  def convertToInputStream(data: Array[Byte]) = {
+    new ByteArrayInputStream(data)
+  }
+
   // test with Apache Http Commons instead of AWSHttp
+  // this method really renders output
   def translateRequestWithTerminationApacheHttp(request: HttpRequest)(implicit mat: Materializer): Future[HttpResponse] = {
     import scala.concurrent.ExecutionContext.Implicits.global
 
@@ -233,6 +248,8 @@ object AWSSignatureProvider {
     )
   }
   // test with Apache Http Commons instead of AWSHttp
+  // at the moment only handles simple requests resignature, no chunked uploads or multipart
+  // also this is proxy with buffering. Buffering is required to calculate hashes for signature
   def execS3RequestApacheHttpClient(request: HttpRequest)(implicit mat: Materializer): CloseableHttpResponse = {
     import scala.collection.JavaConverters._
 
@@ -244,13 +261,29 @@ object AWSSignatureProvider {
     }
     val path = request.uri.path.toString()
     val params = request.uri.rawQueryString
-    val content = request.entity.dataBytes.runWith(StreamConverters.asInputStream())
-    val proxyRequest = generateS3Request(method, path, params, content)
-    //    val originalSHA256 = request.getHeader("x-amz-content-sha256").get().value()
+    val content: InputStream = request.entity.dataBytes.runWith(StreamConverters.asInputStream()) // consumable once akka stream
+    val contentSize = request.entity.getContentLengthOption().getAsLong.toInt
+    // akka stream copied to newContent
+    // also ByteArrayInputStream supports mark() and reset() so we can use it in request.setContent(InputStream)
+    // otherwise AWS signature seems to be incorrect
+    val newContent: ByteArrayInputStream = if (contentSize > 0 && (request.method.value == "PUT" || request.method.value == "POST")) {
+      convertToInputStream(convertToArray(content, contentSize)) // this is costly. Any better way?
+    } else {
+      new ByteArrayInputStream(Array())
+    }
+    val proxyRequest = generateS3Request(method, path, params, newContent)
 
-    // add headers and generate new signature
-    proxyRequest.addHeader("Content-Type", request.entity.contentType.toString())
-    proxyRequest.addHeader("x-amz-content-sha256", new ContentHash().calculateContentHash(content))
+    // calculate MD5 to compare between client and proxy - info only and example of MD5 generation
+    //    if (contentSize > 0) {
+    //      val messageDigest = MessageDigest.getInstance("MD5")
+    //      println("md5sum: " + new String(Base64.encode(DigestUtils.md5(convertToArray(newContent, contentSize)))))
+    //    }
+
+    // add sha256 header, otherwise request will be marked as unsigned (SignedHeaders=host;x-amz-content-sha256;x-amz-date)
+    // we can think of coping original header value but in case of multipart it will not work (STREAMING-AWS4-HMAC-SHA256-PAYLOAD)
+    proxyRequest.addHeader("x-amz-content-sha256", new ContentHash().calculate(proxyRequest))
+
+    // this generates authorization based on SignedHeaders=host;x-amz-content-sha256;x-amz-date
     signS3Request(proxyRequest, s3credentials)
     val signedHeaders: Array[Header] = proxyRequest.getHeaders.asScala.map(h => new BasicHeader(h._1, h._2)).toArray
 
@@ -267,7 +300,7 @@ object AWSSignatureProvider {
 
     val httpClient = HttpClients.createDefault()
     val httpEntity = new BasicHttpEntity()
-    httpEntity.setContent(content)
+    httpEntity.setContent(newContent)
     httpEntity.setContentLength(request.entity.contentLengthOption.getOrElse(0))
 
     val httpRequest = request.method.value match {

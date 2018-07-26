@@ -32,7 +32,7 @@ case class ProxyRoute()(implicit mat: Materializer) extends LazyLogging
           case true =>
             val newHtr = translateRequest(htr)
             logger.debug(s"NEW: $newHtr")
-            val response = proxyUsingApacheHttp(htr)
+            val response = translateRequestWithTerminationApacheHttp(htr)
             response.map(r => println(s"RESPONSE: ${r}")) //logger.debug
             response
         }
