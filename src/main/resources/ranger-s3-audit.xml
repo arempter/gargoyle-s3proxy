@@ -44,7 +44,7 @@
   <!-- Kafka audit provider configuration -->
   <property>
     <name>xasecure.audit.kafka.is.enabled</name>
-    <value>true</value>
+    <value>false</value>
   </property>
 
   <property>
