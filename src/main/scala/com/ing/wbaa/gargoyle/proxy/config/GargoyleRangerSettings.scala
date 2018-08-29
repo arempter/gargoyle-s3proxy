@@ -8,6 +8,7 @@ class GargoyleRangerSettings(config: Config) extends Extension {
   val appId: String = config.getString("gargoyle.ranger.app_id")
   val listBucketsEnabled = config.getBoolean("gargoyle.ranger.allow-list-buckets")
   val createBucketsEnabled = config.getBoolean("gargoyle.ranger.allow-create-buckets")
+  val rangerAuditEnabled = config.getBoolean("gargoyle.ranger.enable-ranger-audit")
 }
 
 object GargoyleRangerSettings extends ExtensionId[GargoyleRangerSettings] with ExtensionIdProvider {
